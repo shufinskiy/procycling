@@ -9,7 +9,7 @@ import pandas as pd
 import requests
 from lxml import etree
 
-from utils import ISO_COUNTRY_CODE, HISTORY_CODE
+from utils import ISO_COUNTRY_CODE, HISTORY_CODE, XPATH_HIST_GEN, XPATH_HIST_YBY, XPATH_HIST_YO
 
 BASE_DIR = Path(os.environ.get("CYCLING_DIR", Path.home() / "procycling"))
 DATA_DIR = Path(BASE_DIR, "data")
@@ -147,8 +147,8 @@ class FirstCycling(object):
             races_year = pd.read_csv(filepath)
         return races_year
 
-    def read_race_history(self, race_id: Union[int, List[int]]) -> pd.DataFrame:
-        info_url = "https://firstcycling.com/race.php?r={}&k={}"
+    def read_race_hist_general(self, race_id: Union[int, List[int]]) -> pd.DataFrame:
+        info_url = FIRSTCYCLING_URL + "race.php?r={}&k={}"
         overall_tbl = pd.DataFrame()
         for k in range(1, 5):
             page = bs4.BeautifulSoup(requests.get(info_url.format(race_id, k)).content, 'lxml')
@@ -158,15 +158,15 @@ class FirstCycling(object):
 
             hist_df = (
                 pd.DataFrame([[
-                    *self._xpath_history_tbl(dom, tr, 1, 'a'),
-                    *self._xpath_history_tbl(dom, tr, 2, return_text=True),
-                    *self._xpath_history_tbl(dom, tr, 3, 'a', expected_length=3, check_information=True),
-                    *self._xpath_history_tbl(dom, tr, 4, 'span'),
-                    *self._xpath_history_tbl(dom, tr, 4, 'a', expected_length=2),
-                    *self._xpath_history_tbl(dom, tr, 5, 'span'),
-                    *self._xpath_history_tbl(dom, tr, 5, 'a', expected_length=2),
-                    *self._xpath_history_tbl(dom, tr, 6, 'span'),
-                    *self._xpath_history_tbl(dom, tr, 6, 'a', expected_length=2),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 1, 'a'),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 2, return_text=True),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 3, 'a', expected_length=3, check_information=True),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 4, 'span'),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 4, 'a', expected_length=2),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 5, 'span'),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 5, 'a', expected_length=2),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 6, 'span'),
+                    *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 6, 'a', expected_length=2),
                 ] for tr in range(1, len(tbl_history.find_all('tr')) + 1)],
                     columns=['Year', 'Category', 'Information', 'RaceLink', 'Results',
                              'WinnerCountry', 'WinnerID', 'Winner', 'SecondCountry', 'SecondID',
@@ -192,6 +192,183 @@ class FirstCycling(object):
                          'ThirdID', 'Third', 'ThirdLink']]
             )
             overall_tbl = pd.concat([overall_tbl, hist_df], axis=0, ignore_index=True)
+        return overall_tbl
+
+    def read_race_hist_yby(self, race_id: int, convert_to_sec: bool = False) -> pd.DataFrame:
+        yby_url = FIRSTCYCLING_URL + "race.php?r={}&k=X"
+        page = bs4.BeautifulSoup(requests.get(yby_url.format(race_id)).content, 'lxml')
+        body = page.find("body")
+        years = [year.text.strip('\n') for year in body.find_all('thead')]
+        tbl_yby = body.find_all("tbody")
+        dom = etree.HTML(str(body))
+        overall_tbl = pd.DataFrame()
+        for i, tbl_year in enumerate(tbl_yby):
+            text = [x.strip('\t') for x in tbl_year.text.split('\n') if x not in ['', ' ', '\r']]
+            position = [int(pos) for pos in text[::2]]
+            results = [[re.sub(r"(\d{1,3}:\d{2}:\d{2})|(\+.+)", "", x),
+                        re.search(r"(\d{1,3}:\d{2}:\d{2})|((?<=\+ ).+)|(0)", x)] for x in text[1::2]]
+            results = [[rider, None] if time is None else [rider, time.group()] for rider, time in results]
+            xpath_year = [[
+                *self._xpath_element(dom, XPATH_HIST_YBY, i+2, tr, 2, 'span'),
+                *self._xpath_element(dom, XPATH_HIST_YBY, i+2, tr, 3, 'a')
+            ] for tr in range(1, len(tbl_year.find_all('td')) + 1)]
+            countries = [self._re_country_flag(flag[0]) for flag in xpath_year]
+            riders_id = [self._re_racer_id(rider_id[1]) for rider_id in xpath_year]
+            riders_link = [rider_id[1] for rider_id in xpath_year]
+            year = (
+                pd.DataFrame([[pos, country, r_id, r_link, *res] for pos, country, r_id, r_link, res in zip(
+                    position, countries, riders_id, riders_link, results
+                )],
+                             columns=['Position', 'RiderCountry', 'RiderID', 'RiderLink', 'Rider', 'Time'])
+                .assign(
+                    Year=years[i],
+                    RiderLink=lambda df_: FIRSTCYCLING_URL + df_.RiderLink
+                )
+            )
+            overall_tbl = pd.concat([overall_tbl, year], axis=0, ignore_index=True)
+        if convert_to_sec:
+            overall_tbl = (
+                overall_tbl
+                .merge(
+                    (
+                        overall_tbl
+                        .pipe(lambda df_: df_.loc[df_.Position == 1])
+                        .drop(columns=['Position', 'Rider', 'RiderLink', 'RiderCountry', 'RiderID'])
+                        .reset_index(drop=True)
+                    ),
+                    how='inner',
+                    on=['Year']
+                )
+                .assign(Time_Winner=lambda df_: df_.Time_x == df_.Time_y)
+                .assign(
+                    Time_x=lambda df_: [self._convert_to_seconds(race_time) for race_time in df_.Time_x],
+                    Time_y=lambda df_: [self._convert_to_seconds(race_time) for race_time in df_.Time_y]
+                )
+                .assign(
+                    Time_x=lambda df_: [x + y if z is False else x for (x, y, z) in zip(
+                        df_.Time_x,
+                        df_.Time_y,
+                        df_.Time_Winner
+                    )]
+                )
+                .drop(columns=['Time_y', 'Time_Winner'])
+                .rename(columns={'Time_x': 'Time'})
+            )
+        else:
+            overall_tbl = (
+                overall_tbl
+                .assign(Time=lambda df_: ['+' + t if pos != 1 and t is not None else t for t, pos in zip(
+                    df_.Time, df_.Position
+                )])
+            )
+        return overall_tbl
+
+    def read_race_hist_victories(self, race_id: int) -> pd.DataFrame:
+        victory_url = FIRSTCYCLING_URL + "race.php?r={}&k=W"
+        page = bs4.BeautifulSoup(requests.get(victory_url.format(race_id)).content, 'lxml')
+        body = page.find("body")
+        tbl_victory = body.find("tbody")
+        dom = etree.HTML(str(body))
+
+        text = [x.strip('\t').strip('\r') for x in tbl_victory.text.split('\n') if x not in ['', ' ', '\r']]
+        text = [x.strip(' ').strip('\t') for x in text if re.search(r'(\w)|(\d)', x) is not None]
+        results = [[pos, rider, country_name, first, second, third] \
+                   for pos, rider, country_name, first, second, third in zip(
+            text[::6],
+            text[1::6],
+            text[2::6],
+            text[3::6],
+            text[4::6],
+            text[5::6]
+        )]
+
+        xpath_winner = [[
+            *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 3, 'span'),
+            *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 2, 'a')
+        ] for tr in range(1, len(tbl_victory.find_all('tr')) + 1)]
+        countries = [self._re_country_flag(flag[0]) for flag in xpath_winner]
+        riders_id = [self._re_racer_id(rider_id[1]) for rider_id in xpath_winner]
+        riders_link = [rider_id[1] for rider_id in xpath_winner]
+        winner = (
+            pd.DataFrame(
+                [[country, r_id, r_link, *res] for country, r_id, r_link, res in zip(
+                    countries, riders_id, riders_link, results
+                )],
+                columns=['RiderCountry', 'RiderID', 'RiderLink', 'Position', 'Rider', 'CountryName',
+                         'FirstPlace', 'SecondPlace', 'ThirdPlace'])
+            .assign(RiderLink=lambda df_: FIRSTCYCLING_URL + df_.RiderLink)
+            .loc[:, ['Position', 'RiderCountry', 'RiderID', 'RiderLink', 'Rider', 'CountryName',
+                     'FirstPlace', 'SecondPlace', 'ThirdPlace']]
+        )
+        return winner
+
+    def read_race_hist_stages(self, race_id: int) -> pd.DataFrame:
+        stages_url = FIRSTCYCLING_URL + "race.php?r={}&k=Z"
+        page = bs4.BeautifulSoup(requests.get(stages_url.format(race_id)).content, 'lxml')
+        body = page.find("body")
+        tbl_stages = body.find("tbody")
+        dom = etree.HTML(str(body))
+
+        text = [x.strip('\t').strip('\r') for x in tbl_stages.text.split('\n') if x not in ['', ' ', '\r']]
+        text = [x.strip(' ').strip('\t') for x in text if re.search(r'(\w)|(\d)', x) is not None]
+        results = [[pos, rider, country_name, win] for pos, rider, country_name, win in zip(
+            text[::4],
+            text[1::4],
+            text[2::4],
+            text[3::4]
+        )]
+        xpath_stage = [[
+            *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 3, 'span'),
+            *self._xpath_element(dom, XPATH_HIST_GEN, 3, tr, 2, 'a')
+        ] for tr in range(1, len(tbl_stages.find_all('tr')) + 1)]
+        countries = [self._re_country_flag(flag[0]) for flag in xpath_stage]
+        riders_id = [self._re_racer_id(rider_id[1]) for rider_id in xpath_stage]
+        riders_link = [rider_id[1] for rider_id in xpath_stage]
+        win_stages = (
+            pd.DataFrame(
+                [[country, r_id, r_link, *res] for country, r_id, r_link, res in zip(
+                    countries, riders_id, riders_link, results
+                )],
+                columns=['RiderCountry', 'RiderID', 'RiderLink', 'Position', 'Rider', 'CountryName', 'WinStages'])
+            .assign(RiderLink=lambda df_: FIRSTCYCLING_URL + df_.RiderLink)
+            .loc[:, ['Position', 'RiderCountry', 'RiderID', 'RiderLink', 'Rider', 'CountryName', 'WinStages']]
+        )
+        return win_stages
+
+    def read_race_hist_young_old_win(self, race_id: int) -> pd.DataFrame:
+        yby_url = FIRSTCYCLING_URL + "race.php?r={}&k=Y"
+        page = bs4.BeautifulSoup(requests.get(yby_url.format(race_id)).content, 'lxml')
+        body = page.find("body")
+        tbl_yo = body.find_all("tbody")
+        dom = etree.HTML(str(body))
+        overall_tbl = pd.DataFrame()
+        for i, yo in enumerate(tbl_yo):
+            text = [x.strip('\t').strip(' ') for x in yo.text.split('\n') if x not in ['', ' ', '\r']]
+            if self._is_blank(text):
+                return None
+            tbl = [[year, rider, country_name, age] for year, rider, country_name, age in zip(text[::4],
+                                                                                              text[1::4],
+                                                                                              text[2::4],
+                                                                                              text[3::4])]
+            xpath_year = [[
+                *self._xpath_element(dom, XPATH_HIST_YO, 3, tr, 3, 'span', table=i+1),
+                *self._xpath_element(dom, XPATH_HIST_YO, 3, tr, 2, 'a', table=i+1)
+            ] for tr in range(1, len(yo.find_all('td')) + 1)]
+            countries = [self._re_country_flag(flag[0]) for flag in xpath_year]
+            riders_id = [self._re_racer_id(rider_id[1]) for rider_id in xpath_year]
+            riders_link = [rider_id[1] for rider_id in xpath_year]
+            age_winner = (
+                pd.DataFrame([[country, r_id, r_link, *info] for country, r_id, r_link, info in zip(
+                    countries, riders_id, riders_link, tbl
+                )],
+                             columns=['RiderCountry', 'RiderID', 'RiderLink', 'Year', 'Rider', 'CountryName', 'Age'])
+                .assign(
+                    AgeType='Youngest' if i == 0 else 'Oldest',
+                    RiderLink=lambda df_: FIRSTCYCLING_URL + df_.RiderLink
+                )
+                .loc[:, ['Year', 'AgeType', 'RiderCountry', 'RiderID', 'RiderLink', 'Rider', 'CountryName', 'Age']]
+            )
+            overall_tbl = pd.concat([overall_tbl, age_winner], axis=0, ignore_index=True)
         return overall_tbl
 
     def read_race(self,
@@ -249,16 +426,22 @@ class FirstCycling(object):
                                                           "%Y/%M/%d").day < datetime.now().day])
 
     @staticmethod
-    def _xpath_history_tbl(
+    def _xpath_element(
             dom: etree._Element,
+            base_xpath: str,
+            div: int,
             tr: int,
             td: int,
             tag: str = None,
+            table: int = None,
             expected_length: int = 1,
             check_information: bool = False,
             return_text: bool = False
     ):
-        base_xpath = '//*[@id="wrapper"]/div[3]/table/tbody/tr[{}]/td[{}]'.format(str(tr), str(td))
+        if table is not None:
+            base_xpath = base_xpath.format(str(div), str(table), str(tr), str(td))
+        else:
+            base_xpath = base_xpath.format(str(div), str(tr), str(td))
         xpath = base_xpath + '/' + tag if tag is not None else base_xpath
         try:
             res = dom.xpath(xpath)[0].values()
@@ -271,9 +454,28 @@ class FirstCycling(object):
             res = [dom.xpath(xpath)[0].text]
         return res
 
+    @staticmethod
+    def _convert_to_seconds(race_time: str) -> int:
+        race_time = race_time.split(':')
+        if len(race_time) == 1:
+            return int(race_time[0])
+        elif len(race_time) == 2:
+            return int(race_time[0]) * 60 + int(race_time[1])
+        elif len(race_time) == 3:
+            return int(race_time[0]) * 3600 + int(race_time[0]) * 60 + int(race_time[1])
+
+    @staticmethod
+    def _is_blank(data: List[str]) -> bool:
+        info = set([x for x in data[2::3]])
+        return info == {'Information---'}
+
 
 if __name__ == '__main__':
     cycling = FirstCycling(season=2023)
     # df = cycling.read_schedule(force_cache=True)
-    hist = cycling.read_race_history(677)
+    hist1 = cycling.read_race_hist_general(667)
+    hist2 = cycling.read_race_hist_young_old_win(667)
+    hist3 = cycling.read_race_hist_yby(667, convert_to_sec=False)
+    hist4 = cycling.read_race_hist_victories(667)
+    hist5 = cycling.read_race_hist_stages(667)
     a = 1

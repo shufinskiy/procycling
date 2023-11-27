@@ -1,3 +1,7 @@
+XPATH_HIST_GEN = '//*[@id="wrapper"]/div[{}]/table/tbody/tr[{}]/td[{}]'
+XPATH_HIST_YBY = '//*[@id="wrapper"]/div[3]/div[{}]/div/table/tbody/tr[{}]/td[{}]'
+XPATH_HIST_YO = '//*[@id="wrapper"]/div[{}]/table[{}]/tbody/tr[{}]/td[{}]'
+
 HISTORY_CODE = {
     1: 'Overall',
     2: 'Youth',
