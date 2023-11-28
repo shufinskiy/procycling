@@ -1,6 +1,13 @@
+import re
+
 XPATH_HIST_GEN = '//*[@id="wrapper"]/div[{}]/table/tbody/tr[{}]/td[{}]'
 XPATH_HIST_YBY = '//*[@id="wrapper"]/div[3]/div[{}]/div/table/tbody/tr[{}]/td[{}]'
 XPATH_HIST_YO = '//*[@id="wrapper"]/div[{}]/table[{}]/tbody/tr[{}]/td[{}]'
+
+RE_FLAG = re.compile(r"(?<=flag flag-)\w+")
+RE_ID = re.compile(r"(?<=r=)\d+")
+RE_DATE_TOUR = re.compile(r"\d{2}\.\d{2}-\d{2}\.\d{2}")
+RE_DATE_RACE = re.compile(r"\d{2}\.\d{2}")
 
 HISTORY_CODE = {
     1: 'Overall',
