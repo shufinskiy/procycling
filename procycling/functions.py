@@ -1,9 +1,10 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from datetime import datetime
 
+import pandas as pd
 from lxml import etree
 
-from utils import ISO_COUNTRY_CODE, RE_FLAG, RE_ID, RE_DATE_RACE
+from procycling.utils import ISO_COUNTRY_CODE, RE_FLAG, RE_ID, RE_DATE_RACE
 
 
 def parse_race_dates(season: int, date: str):
@@ -51,6 +52,8 @@ def is_blank(data: List[str]) -> bool:
 
 
 def convert_to_seconds(race_time: str) -> int:
+    if race_time is None:
+        return None
     race_time = race_time.split(':')
     if len(race_time) == 1:
         return int(race_time[0])
@@ -87,3 +90,16 @@ def xpath_element(
     if return_text:
         res = [dom.xpath(xpath)[0].text]
     return res
+
+
+def convert_dataframe_to_json(
+        df: Optional[pd.DataFrame],
+        columns: bool = False
+) -> Optional[List]:
+    if isinstance(df, pd.DataFrame):
+        if columns:
+            return df.columns.to_list()
+        else:
+            return df.values.tolist()
+    else:
+        return None

@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 import bs4
@@ -28,7 +29,9 @@ class RaceScraper(object):
         t = 2 if self.gender == 'M' else 6
         races = []
         for year in range(self.start_year, self.end_year+1):
+            print(f'Year {year} start in {datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d %H:%M:%S")}')
             for month in range(1, 13):
+                time.sleep(1)
                 s = bs4.BeautifulSoup(requests.get(self.url.format(str(year), str(t), str(month))).content,
                                       'lxml')
                 dom = etree.HTML(str(s.find('body')))
@@ -65,11 +68,12 @@ class RaceScraper(object):
                                                                                            rider_lnk,
                                                                                            text)]
                 races.extend(races_month)
+            print(f'Year {year} finish in {datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d %H:%M:%S")}')
         races = pd.DataFrame(races).drop_duplicates().values.tolist()
         return races
 
 
 if __name__ == '__main__':
-    test = RaceScraper(2023, 2023)
+    test = RaceScraper(1876, 2023)
     list_race = test.scrape_races()
-    a = 1
+    pd.DataFrame(list_race).to_csv('static_race.csv', index=False)
